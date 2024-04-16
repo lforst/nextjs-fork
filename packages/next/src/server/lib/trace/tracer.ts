@@ -38,7 +38,11 @@ const isPromise = <T>(p: any): p is Promise<T> => {
 
 type BubbledError = Error & { bubble?: boolean }
 
-const closeSpanWithError = (span: Span, error?: Error) => {
+const closeSpanWithError = (
+  span: Span,
+  options: TracerSpanOptions,
+  error?: Error
+) => {
   if ((error as BubbledError | undefined)?.bubble === true) {
     span.setAttribute('next.bubble', true)
   } else {
@@ -47,7 +51,10 @@ const closeSpanWithError = (span: Span, error?: Error) => {
     }
     span.setStatus({ code: SpanStatusCode.ERROR, message: error?.message })
   }
-  span.end()
+
+  if (!options.manual) {
+    span.end()
+  }
 }
 
 type TracerSpanOptions = Omit<SpanOptions, 'attributes'> & {
@@ -55,6 +62,7 @@ type TracerSpanOptions = Omit<SpanOptions, 'attributes'> & {
   spanName?: string
   attributes?: Partial<Record<AttributeNames, AttributeValue | undefined>>
   hideSpan?: boolean
+  manual?: boolean
 }
 
 interface NextTracer {
@@ -307,7 +315,9 @@ class NextTracerImpl implements NextTracer {
           }
           try {
             if (fn.length > 1) {
-              return fn(span, (err?: Error) => closeSpanWithError(span, err))
+              return fn(span, (err?: Error) =>
+                closeSpanWithError(span, options, err)
+              )
             }
 
             const result = fn(span)
@@ -315,24 +325,28 @@ class NextTracerImpl implements NextTracer {
               // If there's error make sure it throws
               return result
                 .then((res) => {
-                  span.end()
+                  if (!options.manual) {
+                    span.end()
+                  }
                   // Need to pass down the promise result,
                   // it could be react stream response with error { error, stream }
                   return res
                 })
                 .catch((err) => {
-                  closeSpanWithError(span, err)
+                  closeSpanWithError(span, options, err)
                   throw err
                 })
                 .finally(onCleanup)
             } else {
-              span.end()
+              if (!options.manual) {
+                span.end()
+              }
               onCleanup()
             }
 
             return result
           } catch (err: any) {
-            closeSpanWithError(span, err)
+            closeSpanWithError(span, options, err)
             onCleanup()
             throw err
           }
